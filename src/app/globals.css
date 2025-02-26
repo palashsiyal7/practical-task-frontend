@@ -5,12 +5,16 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --input-text: #171717;
+  --data-text: #171717;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
-    --foreground: #ededed;
+    /* --foreground: #ededed;
+    --input-text: #ededed;
+    --data-text: #ededed; */
   }
 }
 
@@ -20,4 +24,49 @@ body {
   font-family: Arial, Helvetica, sans-serif;
   margin: 0;
   font-family: sans-serif;
+}
+
+/* Input and form styles */
+input, 
+textarea, 
+select {
+  color: var(--input-text) !important;
+}
+
+/* Table and data display styles */
+table td,
+table th,
+.text-data {
+  color: var(--data-text) !important;
+}
+
+/* Force certain text elements to be black regardless of color scheme */
+.text-force-dark {
+  color: #171717 !important;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: white;
+  padding: 2rem;
+  border-radius: 0.5rem;
+  max-width: 90%;
+  max-height: 90%;
+  overflow-y: auto;
+  z-index: 1001;
+  position: relative;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }

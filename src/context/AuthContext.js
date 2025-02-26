@@ -1,5 +1,6 @@
-import { createContext, useReducer, useEffect } from 'react';
+import { createContext, useReducer, useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { getSessionItem, setSessionItem, removeSessionItem, getWindowSessionId } from '@/utils/sessionManager';
 
 // Initial state
 const initialState = {
@@ -68,51 +69,88 @@ export const AuthContext = createContext();
 export const AuthProvider = ({ children }) => {
   const [state, dispatch] = useReducer(authReducer, initialState);
   const router = useRouter();
+  const [isClient, setIsClient] = useState(false);
+  const [userChecked, setUserChecked] = useState(false);
+  const [windowSessionId, setWindowSessionId] = useState(null);
 
-  // Check if user is logged in
+  // Set isClient to true when component mounts (client-side only)
   useEffect(() => {
-    const loadUser = async () => {
-      const token = localStorage.getItem('token');
-      
-      if (!token) {
-        dispatch({ type: 'AUTH_ERROR' });
-        return;
-      }
+    setIsClient(true);
+  }, []);
 
+  // Initialize window session ID for this browser window
+  useEffect(() => {
+    if (isClient) {
+      const sessionId = getWindowSessionId();
+      setWindowSessionId(sessionId);
+      
+      // Log to confirm we're getting a unique session per window
+      console.log('Window Session ID:', sessionId);
+    }
+  }, [isClient]);
+
+  // Memoize clearError to prevent it from changing on every render
+  const clearError = useCallback(() => {
+    dispatch({ type: 'CLEAR_ERROR' });
+  }, []);
+
+  // Check if user is logged in - only run once
+  useEffect(() => {
+    // Only run on client and if we haven't checked the user yet
+    if (!isClient || userChecked || !windowSessionId) return;
+
+    const loadUser = async () => {
+      // Use try/catch for localStorage to handle SSR
       try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/user`, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
+        const token = getSessionItem('token');
         
-        const data = await res.json();
-        
-        if (res.ok) {
-          dispatch({
-            type: 'LOGIN_SUCCESS',
-            payload: data
+        if (!token) {
+          dispatch({ type: 'AUTH_ERROR' });
+          setUserChecked(true);
+          return;
+        }
+
+        try {
+          const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/auth/user`, {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
           });
-        } else {
-          localStorage.removeItem('token');
+          
+          const data = await res.json();
+          
+          if (res.ok) {
+            dispatch({
+              type: 'LOGIN_SUCCESS',
+              payload: data
+            });
+          } else {
+            removeSessionItem('token');
+            dispatch({ type: 'AUTH_ERROR' });
+          }
+        } catch (error) {
+          console.error('Error loading user:', error);
+          removeSessionItem('token');
           dispatch({ type: 'AUTH_ERROR' });
         }
-      } catch (error) {
-        console.error('Error loading user:', error);
-        localStorage.removeItem('token');
+        
+        setUserChecked(true);
+      } catch (e) {
+        console.error('localStorage is not available:', e);
         dispatch({ type: 'AUTH_ERROR' });
+        setUserChecked(true);
       }
     };
 
     loadUser();
-  }, []);
+  }, [isClient, userChecked, windowSessionId]);
 
   // Login
   const login = async (email, password) => {
     dispatch({ type: 'LOADING' });
     
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -123,19 +161,34 @@ export const AuthProvider = ({ children }) => {
       const data = await res.json();
       
       if (res.ok) {
-        localStorage.setItem('token', data.token);
-        
-        dispatch({
-          type: 'LOGIN_SUCCESS',
-          payload: data
-        });
-        
-        router.push('/dashboard');
+        try {
+          setSessionItem('token', data.token);
+          
+          dispatch({
+            type: 'LOGIN_SUCCESS',
+            payload: data
+          });
+          
+          // Navigate after state has settled
+          setTimeout(() => {
+            router.push('/dashboard');
+          }, 100);
+          
+          return true;
+        } catch (e) {
+          console.error('localStorage is not available:', e);
+          dispatch({
+            type: 'LOGIN_FAIL',
+            payload: 'Local storage unavailable. Please check your browser settings.'
+          });
+          return false;
+        }
       } else {
         dispatch({
           type: 'LOGIN_FAIL',
-          payload: data.message
+          payload: data.message || 'Login failed. Please check your credentials.'
         });
+        return false;
       }
     } catch (error) {
       console.error('Login error:', error);
@@ -144,6 +197,7 @@ export const AuthProvider = ({ children }) => {
         type: 'LOGIN_FAIL',
         payload: 'Server error. Please try again.'
       });
+      return false;
     }
   };
 
@@ -152,7 +206,7 @@ export const AuthProvider = ({ children }) => {
     dispatch({ type: 'LOADING' });
     
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/register`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -163,19 +217,34 @@ export const AuthProvider = ({ children }) => {
       const data = await res.json();
       
       if (res.ok) {
-        localStorage.setItem('token', data.token);
-        
-        dispatch({
-          type: 'REGISTER_SUCCESS',
-          payload: data
-        });
-        
-        router.push('/dashboard');
+        try {
+          setSessionItem('token', data.token);
+          
+          dispatch({
+            type: 'REGISTER_SUCCESS',
+            payload: data
+          });
+          
+          // Navigate after state has settled
+          setTimeout(() => {
+            router.push('/dashboard');
+          }, 100);
+          
+          return true;
+        } catch (e) {
+          console.error('localStorage is not available:', e);
+          dispatch({
+            type: 'REGISTER_FAIL',
+            payload: 'Local storage unavailable. Please check your browser settings.'
+          });
+          return false;
+        }
       } else {
         dispatch({
           type: 'REGISTER_FAIL',
-          payload: data.message
+          payload: data.message || 'Registration failed. Please try again.'
         });
+        return false;
       }
     } catch (error) {
       console.error('Registration error:', error);
@@ -184,20 +253,25 @@ export const AuthProvider = ({ children }) => {
         type: 'REGISTER_FAIL',
         payload: 'Server error. Please try again.'
       });
+      return false;
     }
   };
 
   // Logout
-  const logout = () => {
-    localStorage.removeItem('token');
-    dispatch({ type: 'LOGOUT' });
-    router.push('/auth/login');
-  };
-
-  // Clear error
-  const clearError = () => {
-    dispatch({ type: 'CLEAR_ERROR' });
-  };
+  const logout = useCallback(() => {
+    try {
+      removeSessionItem('token');
+      dispatch({ type: 'LOGOUT' });
+      
+      // Navigate after state has settled
+      setTimeout(() => {
+        router.push('/auth/login');
+      }, 100);
+    } catch (e) {
+      console.error('localStorage is not available:', e);
+      dispatch({ type: 'LOGOUT' });
+    }
+  }, [router]);
 
   return (
     <AuthContext.Provider
@@ -209,7 +283,8 @@ export const AuthProvider = ({ children }) => {
         login,
         register,
         logout,
-        clearError
+        clearError,
+        windowSessionId
       }}
     >
       {children}

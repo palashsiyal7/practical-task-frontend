@@ -5,20 +5,105 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { AuthContext } from '@/context/AuthContext';
 import useSocket from '@/hooks/useSocket';
+import useWindowSession from '@/hooks/useWindowSession';
 import TextSubmissionForm from '@/components/Dashboard/TextSubmissionForm';
+import { getAllSubmissions } from '@/lib/api';
 
 export default function Dashboard() {
-  const { user, isAuthenticated, loading, logout } = useContext(AuthContext);
-  const { notifications, clearNotifications } = useSocket();
+  const { user, isAuthenticated, loading, logout, windowSessionId } = useContext(AuthContext);
+  const { notifications, clearNotifications, socket } = useSocket();
+  const { sessionId, isNewWindow } = useWindowSession();
   const router = useRouter();
   const pathname = usePathname();
   const [showNotifications, setShowNotifications] = useState(false);
+  const [sessionData, setSessionData] = useState(null);
+  const [submissions, setSubmissions] = useState([]);
+  const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(true);
+  const [submissionError, setSubmissionError] = useState(null);
+
+  // Get or initialize session data
+  useEffect(() => {
+    if (typeof window !== 'undefined' && sessionId) {
+      try {
+        // Try to get any existing data for this session
+        const sessionDataKey = `session_data_${sessionId}`;
+        const savedData = localStorage.getItem(sessionDataKey);
+        
+        if (savedData) {
+          setSessionData(JSON.parse(savedData));
+        } else {
+          // Initialize new session data
+          const newSessionData = {
+            createdAt: new Date().toISOString(),
+            visitCount: 1,
+            sessionId
+          };
+          
+          localStorage.setItem(sessionDataKey, JSON.stringify(newSessionData));
+          setSessionData(newSessionData);
+        }
+      } catch (error) {
+        console.error('Error managing session data:', error);
+      }
+    }
+  }, [sessionId]);
+
+  // Load submissions data
+  useEffect(() => {
+    if (!isAuthenticated || !user) return;
+
+    const fetchSubmissions = async () => {
+      try {
+        setIsLoadingSubmissions(true);
+        const data = await getAllSubmissions();
+        setSubmissions(data);
+        setSubmissionError(null);
+      } catch (err) {
+        console.error('Error fetching submissions:', err);
+        setSubmissionError('Failed to load submissions');
+      } finally {
+        setIsLoadingSubmissions(false);
+      }
+    };
+
+    fetchSubmissions();
+  }, [isAuthenticated, user]);
+
+  // Listen for real-time submission updates
+  useEffect(() => {
+    if (!user || !socket) return;
+
+    const handleNewSubmission = (data) => {
+      // Create a temporary submission object
+      const newSubmission = {
+        _id: Date.now().toString(), // Temporary ID
+        text: data.submittedText,
+        createdAt: data.submissionTime || new Date().toISOString(),
+        userId: { email: data.username }
+      };
+      
+      setSubmissions(prev => [newSubmission, ...prev]);
+    };
+
+    socket.on('newSubmission', handleNewSubmission);
+
+    return () => {
+      socket.off('newSubmission', handleNewSubmission);
+    };
+  }, [socket, user]);
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
       router.push('/auth/login');
     }
   }, [loading, isAuthenticated, router]);
+
+  // Display a welcome message for new windows
+  useEffect(() => {
+    if (isNewWindow && isAuthenticated) {
+      alert('Welcome to a new session! This window has its own separate session.');
+    }
+  }, [isNewWindow, isAuthenticated]);
 
   if (loading || !isAuthenticated || !user) {
     return (
@@ -32,171 +117,190 @@ export default function Dashboard() {
   const isDeveloper = user.role === 'developer' || isAdmin;
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div className="min-h-screen bg-gray-50">
+      {/* Session info banner */}
+      <div className="bg-indigo-600 text-white px-4 py-2 text-sm text-center">
+        <p>
+          Window Session ID: <span className="font-mono">{sessionId || windowSessionId || 'Not available'}</span>
+          {isNewWindow && ' (New Window Session)'}
+        </p>
+        <p className="text-xs mt-1">
+          Open a new window (Cmd+N) to create a separate session. Each window maintains its own session.
+        </p>
+      </div>
+
       {/* Header */}
-      <nav className="bg-indigo-600 shadow-md">
-        <div className="mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <span className="text-white text-xl font-bold">Dashboard</span>
-              </div>
-            </div>
-            <div className="flex items-center">
-              {/* Notification Bell */}
-              <div className="relative mr-4">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="text-white p-1 rounded-full hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-indigo-600 focus:ring-white"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                  </svg>
-                  {notifications.length > 0 && (
-                    <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-400 ring-2 ring-indigo-600"></span>
-                  )}
-                </button>
-                
-                {/* Notification Dropdown */}
-                {showNotifications && (
-                  <div className="origin-top-right absolute right-0 mt-2 w-80 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50">
-                    <div className="py-1 max-h-96 overflow-y-auto" role="menu" aria-orientation="vertical" aria-labelledby="options-menu">
-                      <div className="flex justify-between items-center px-4 py-2 border-b">
-                        <h3 className="text-sm font-medium text-gray-700">Notifications</h3>
-                        {notifications.length > 0 && (
-                          <button
-                            onClick={clearNotifications}
-                            className="text-xs text-indigo-600 hover:text-indigo-800"
-                          >
-                            Clear all
-                          </button>
-                        )}
-                      </div>
-                      
-                      {notifications.length === 0 ? (
-                        <div className="px-4 py-3 text-sm text-gray-500">
-                          No new notifications
-                        </div>
-                      ) : (
-                        notifications.map((notification, index) => (
-                          <div key={index} className="px-4 py-3 border-b hover:bg-gray-50">
-                            <div className="flex justify-between">
-                              <p className="text-sm font-medium text-gray-700">{notification.username}</p>
-                              <p className="text-xs text-gray-500">
-                                {new Date(notification.submissionTime).toLocaleTimeString()}
-                              </p>
-                            </div>
-                            <p className="text-sm text-gray-600 truncate">
-                              {notification.submittedText}
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+          <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
+          
+          <div className="flex items-center space-x-4">
+            <div className="relative">
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-2 rounded-full text-gray-500 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {notifications.length > 0 && (
+                  <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-500 rounded-full">
+                    {notifications.length}
+                  </span>
+                )}
+              </button>
+              
+              {showNotifications && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg overflow-hidden z-10">
+                  <div className="py-2">
+                    <div className="px-4 py-2 border-b border-gray-200 flex justify-between items-center">
+                      <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
+                      <button
+                        onClick={clearNotifications}
+                        className="text-xs text-indigo-600 hover:text-indigo-800"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                    
+                    {notifications.length === 0 ? (
+                      <p className="px-4 py-2 text-sm text-gray-500">No new notifications</p>
+                    ) : (
+                      notifications.map((notification, index) => (
+                        <div key={index} className="px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
+                          <div className="flex justify-between">
+                            <p className="text-sm font-medium text-force-dark">{notification.username}</p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(notification.timestamp).toLocaleTimeString()}
                             </p>
                           </div>
-                        ))
-                      )}
-                    </div>
+                          <p className="text-sm text-force-dark">{notification.message}</p>
+                        </div>
+                      ))
+                    )}
                   </div>
-                )}
-              </div>
-              
-              {/* User Menu */}
-              <div className="ml-3 relative">
-                <div className="flex items-center">
-                  <span className="text-white mr-2">{user.email}</span>
-                  <span className="bg-indigo-800 text-xs text-white px-2 py-1 rounded-full">
-                    {user.role}
-                  </span>
                 </div>
-              </div>
-              
+              )}
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-700">
+                {user.email}
+              </span>
               <button
                 onClick={logout}
-                className="ml-4 text-white hover:bg-indigo-500 px-3 py-1 rounded"
+                className="ml-4 px-3 py-1 text-sm text-indigo-600 hover:text-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
               >
                 Logout
               </button>
             </div>
           </div>
         </div>
-      </nav>
+      </header>
 
-      <div className="flex">
-        {/* Sidebar */}
-        <div className="w-64 bg-white shadow-md h-screen">
-          <div className="pt-5 pb-4">
-            <nav className="mt-5">
-              <Link 
-                href="/dashboard" 
-                className={`group flex items-center px-4 py-2 text-sm font-medium ${
-                  pathname === '/dashboard' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <svg className="mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                </svg>
-                Dashboard
-              </Link>
-              
-              {isDeveloper && (
-                <Link 
-                  href="/dashboard/text-submission" 
-                  className={`group flex items-center px-4 py-2 text-sm font-medium ${
-                    pathname === '/dashboard/text-submission' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <svg className="mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                  Text Submission
-                </Link>
-              )}
-              
-              {isAdmin && (
-                <Link 
-                  href="/dashboard/admin" 
-                  className={`group flex items-center px-4 py-2 text-sm font-medium ${
-                    pathname === '/dashboard/admin' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <svg className="mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                  </svg>
-                  Admin Panel
-                </Link>
-              )}
-            </nav>
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <div className="flex-1 p-8">
-          <h1 className="text-2xl font-semibold mb-6">Welcome to your Dashboard</h1>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* User Info Card */}
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-4">Your Account</h2>
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Email:</span>
-                  <span className="font-medium">{user.email}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Role:</span>
-                  <span className="font-medium capitalize">{user.role}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">ID:</span>
-                  <span className="font-medium">{user._id}</span>
-                </div>
+      {/* Session information section */}
+      {sessionData && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="bg-white shadow-sm rounded-lg p-6 mb-8">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Current Window Session Info</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div className="bg-gray-50 rounded p-4">
+                <p className="text-gray-500">Session ID</p>
+                <p className="font-mono mt-1">{sessionData.sessionId}</p>
+              </div>
+              <div className="bg-gray-50 rounded p-4">
+                <p className="text-gray-500">Created</p>
+                <p className="mt-1">{new Date(sessionData.createdAt).toLocaleString()}</p>
+              </div>
+              <div className="bg-gray-50 rounded p-4">
+                <p className="text-gray-500">Visit Count</p>
+                <p className="mt-1">{sessionData.visitCount}</p>
               </div>
             </div>
-
-            {/* Text Submission Form */}
-            {isDeveloper && (
-              <TextSubmissionForm />
-            )}
+            <div className="mt-4 text-sm text-gray-600">
+              <p>Each browser window has its own isolated session. Try opening a new window with Cmd+N to see a new session created.</p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Main content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Submit Text Form */}
+          <div className="bg-white shadow-sm rounded-lg p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit Text</h2>
+            <TextSubmissionForm />
+          </div>
+
+          {/* Recent Submissions */}
+          <div className="bg-white shadow-sm rounded-lg p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Submissions</h2>
+            
+            {submissionError && (
+              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+                <span className="block sm:inline">{submissionError}</span>
+              </div>
+            )}
+            
+            {isLoadingSubmissions ? (
+              <div className="flex justify-center p-6">
+                <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-500"></div>
+              </div>
+            ) : submissions.length === 0 ? (
+              <p className="text-center py-4 text-force-dark">No submissions yet</p>
+            ) : (
+              <div className="overflow-y-auto max-h-96">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-force-dark uppercase tracking-wider">
+                        User
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-force-dark uppercase tracking-wider">
+                        Text
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-force-dark uppercase tracking-wider">
+                        Date
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {submissions.map((submission) => (
+                      <tr key={submission._id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="text-sm font-medium text-force-dark">
+                            {submission.userId && typeof submission.userId === 'object' 
+                              ? submission.userId.email 
+                              : 'Unknown User'}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-sm text-force-dark max-w-xs truncate">{submission.text}</div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="text-xs text-force-dark">
+                            {new Date(submission.createdAt).toLocaleString()}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="mt-4 text-right">
+              <Link 
+                href="/dashboard/text-submission" 
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                View All Submissions
+              </Link>
+            </div>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

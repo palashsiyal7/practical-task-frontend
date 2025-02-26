@@ -1,8 +1,10 @@
+import { getSessionItem } from './sessionManager';
+
 export const isLoggedIn = () => {
-  // Check if the user is logged in (e.g., check for a token in local storage)
-  return !!localStorage.getItem('token');
+  // Check if the user is logged in using session-specific token
+  return !!getSessionItem('token');
 };
 
 export const getToken = () => {
-  return localStorage.getItem('token');
+  return getSessionItem('token');
 };

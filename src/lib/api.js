@@ -26,14 +26,28 @@ const authFetch = async (url, options = {}) => {
     headers
   };
 
-  const response = await fetch(url, config);
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.message || 'Something went wrong');
+  try {
+    const response = await fetch(url, config);
+    
+    // Handle non-JSON responses
+    const contentType = response.headers.get('content-type');
+    const isJson = contentType && contentType.includes('application/json');
+    
+    const data = isJson ? await response.json() : { message: await response.text() };
+    
+    if (!response.ok) {
+      console.error('API error:', url, data);
+      throw new Error(data.message || `Error ${response.status}: ${response.statusText}`);
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Fetch error:', url, error);
+    if (error.message === 'Failed to fetch') {
+      throw new Error('Network error. Please check your connection and try again.');
+    }
+    throw error;
   }
-
-  return data;
 };
 
 // Auth APIs
@@ -73,8 +87,12 @@ export const getAllUsers = () => {
 };
 
 export const updateUserRole = (userId, role) => {
-  return authFetch(`${API_URL}/api/users/${userId}`, {
+  return authFetch(`${API_URL}/api/users/${userId}/role`, {
     method: 'PUT',
     body: JSON.stringify({ role })
   });
+};
+
+export const getStatistics = () => {
+  return authFetch(`${API_URL}/api/users/statistics`);
 };
